@@ -37,35 +37,53 @@ namespace VTXdigi_tools {
   class IChargeCollector;
 }
 
-struct VTXdigi_Modular final : k4FWCore::MultiTransformer <std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitLinkCollection> (const edm4hep::SimTrackerHitCollection&, const edm4hep::EventHeaderCollection&)> {
+// Template declaration of the new class VTXdigi_Modular, which inherits from k4FWCore::MultiTransformer. 
+// 2 outputs : TrackerHitPlaneCollection and TrackerHitSimTrackerHitLinkCollection
+// 2 inputs : SimTrackerHitCollection and EventHeaderCollection
 
-  VTXdigi_Modular(const std::string& name, ISvcLocator* svcLoc);
+struct VTXdigi_Modular final 
+    : k4FWCore::MultiTransformer <std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitLinkCollection>(
+      const edm4hep::SimTrackerHitCollection&, const edm4hep::EventHeaderCollection&)> {
   
+  //Constructors declaration - definition is in the .cpp file
+  VTXdigi_Modular(const std::string& name, ISvcLocator* svcLoc);
   StatusCode initialize() override;
   StatusCode finalize() override;
 
-  std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitLinkCollection> operator() (const edm4hep::SimTrackerHitCollection& simHits, const edm4hep::EventHeaderCollection& headers) const override;
+  // Operattor () declaration. Transforms simHits into TrackerHitPlaneCollection (digiHits)
+  std::tuple<edm4hep::TrackerHitPlaneCollection, edm4hep::TrackerHitSimTrackerHitLinkCollection> 
+  operator() (const edm4hep::SimTrackerHitCollection& simHits, const edm4hep::EventHeaderCollection& headers) const override;
 
   /** @brief Increment histograms. To be called from the charge collector, once per simHit */
-  void FillHistograms_fromChargeCollector_perSimHit(const int layer, const dd4hep::rec::Vector3D& pathTravel, const float pathLength_Geant4, const dd4hep::rec::Vector3D& truthPos_local, const TGeoHMatrix& trafoMatrix, const bool createdInGenerator) const;
+  // this method fills histograms (data storage for analysis) based on information from a charge collector, 
+  // processing one simulated hit at a time.
+
+  /** For each simulated hit:
+   * ├─ Store information about which layer it hit
+   * ├─ Record the particle's path and travel distance
+   * ├─ Log the true position in detector coordinates
+   * ├─ Apply coordinate transformations using the matrix
+   * └─ Mark whether this hit came from the event  generator
+   Then fill histograms with all this data 
+  */
+  void FillHistograms_fromChargeCollector_perSimHit(
+      const int layer, const dd4hep::rec::Vector3D& pathTravel, const float pathLength_Geant4, 
+      const dd4hep::rec::Vector3D& truthPos_local, const TGeoHMatrix& trafoMatrix, const bool createdInGenerator
+  ) const; // const at the end -> this method does not modify any of the member variables; its read only. 
 
   /* -- Accessors for charge collector -- */
 
   inline std::array<float, 3> ActiveVolumeDimensions() const { return {m_sensorLength.first, m_sensorLength.second, m_sensorActiveThickness}; }
-
   inline std::pair<float, float> PixelPitch() const { return m_pixelPitch; }
-
   inline std::pair<size_t, size_t> PixelCount() const { return m_pixelCount; }
-
   inline float Threshold() const { return m_threshold; }
-
   inline bool LUT_ignorePitch() const { return m_LUT_ignorePitch.value(); }
   
   /** @brief Draw a random number for charge smearing 
    * FIXME: this is not thread safe, but I don't know how this is done in Gaudi (while retaining thread safety & reproducibility with a given seed). 
   */
   inline float DrawChargeSmearingNumber() const { return static_cast<float>(m_rndm_charge()); }
-
+  
   inline std::string LutFileName() const { return m_LUT_FileName; }
   inline float LutStepLength() const { return m_LUT_stepLength; }
 
@@ -95,11 +113,16 @@ private:
   std::vector<VTXdigi_tools::Cluster> Clusterize(const VTXdigi_tools::HitMap& hitMap) const;
 
   /** @brief Create a digiHit per cluster */
-  void CreateDigiHits(edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitLinks, const dd4hep::DDSegmentation::CellID& cellID, const TGeoHMatrix& trafoMatrix, const std::vector<VTXdigi_tools::Cluster>& clusters) const;
+  void CreateDigiHits(edm4hep::TrackerHitPlaneCollection& digiHits, edm4hep::TrackerHitSimTrackerHitLinkCollection& digiHitLinks, 
+      const dd4hep::DDSegmentation::CellID& cellID, const TGeoHMatrix& trafoMatrix, const std::vector<VTXdigi_tools::Cluster>& clusters
+    ) const;
   
   void FillHistograms_perSimHit(const VTXdigi_tools::SimHitWrapper& hit) const;
   void FillHistograms_perPixel(const dd4hep::DDSegmentation::CellID& cellID, const VTXdigi_tools::Pixel& pix, const std::pair<float, float> clusterPos_local) const;
-  void FillHistograms_perDigiHit(const std::unordered_set<const VTXdigi_tools::SimHitWrapper*>& simHits, const edm4hep::TrackerHitPlane& digiHit, const TGeoHMatrix& trafoMatrix, const int clusterSize, const int clusterSize_u, const int clusterSize_v) const;
+  
+  void FillHistograms_perDigiHit(const std::unordered_set<const VTXdigi_tools::SimHitWrapper*>& simHits, const edm4hep::TrackerHitPlane& digiHit, const TGeoHMatrix& trafoMatrix, 
+      const int clusterSize, const int clusterSize_u, const int clusterSize_v
+    ) const;
   
   /* -- Properties -- */
 
@@ -135,12 +158,17 @@ private:
   
   /* -- Services, geometry variables -- */
   
-  SmartIF<IRndmGenSvc> m_randomService;
-  SmartIF<IGeoSvc> m_geoService;
-  std::unique_ptr<dd4hep::DDSegmentation::BitFieldCoder> m_cellIdDecoder;
-  const dd4hep::Detector* m_detector = nullptr;
-  const dd4hep::rec::SurfaceMap* m_surfaceMap; // map from cellID (unsigned long, without segmentation bits) to simSurface (dd4hep::rec::ISurface*)
-  dd4hep::VolumeManager m_volumeManager; // volume manager to get the physical cell sensitive volume
+  SmartIF<IRndmGenSvc> m_randomService; // SmartIF : Smart pointer to a Gaudi service, with automatic reference counting. Automatically handles memory (no manual deletion needed)
+  SmartIF<IGeoSvc> m_geoService; // Smart pointer to the GeoSvc, which provides access to the detector geometry.
+  std::unique_ptr<dd4hep::DDSegmentation::BitFieldCoder> m_cellIdDecoder; // Unique pointer owns the object exclusively. Can't be copied, only moved. 
+  // Automatically deletes the object when it goes out of scope. Used for the cellID decoder, which decodes the cellID of a simHit to get information about which sensor/layer it belongs to.
+  
+  const dd4hep::Detector* m_detector = nullptr; // Raw pointer to detetctor description. Owned by GeoSvc. This just refrences it to access geometry information. Initialised to nullptr for safety.
+  const dd4hep::rec::SurfaceMap* m_surfaceMap; // map from cellID (unsigned long, without segmentation bits) to simSurface (dd4hep::rec::ISurface*) : ISurfuce : physical surface in teh detector. 
+  //Stores geometric properties of the sensor, such as its position and orientation in the global coordinate system. Used to transform local coordinates of hits to global coordinates.
+  // Used for tracking and hit reco
+  dd4hep::VolumeManager m_volumeManager; // volume manager to get the physical cell sensitive volume. What it is: Manager for physical volumes in the detector. VolumeManager = Navigation helper
+  //Purpose: Given a cellID, quickly find the physical volume
   dd4hep::DetElement m_subDetector; // subdetector DetElement. contains layers as children
   
   /* -- Member variables -- */
@@ -160,7 +188,7 @@ private:
   Rndm::Numbers m_rndm_time;
 
   /* -- Counters -- */
-
+  // Const methods() cant modify their member variables. But if you wanna count the events in const method, uou can use mutable. 
   mutable Gaudi::Accumulators::Counter<> m_counter_eventsRead{this, "Events read"};
   mutable Gaudi::Accumulators::Counter<> m_counter_eventsRejected_noSimHits{this, " - Events rejected (no simHits)"};
   mutable Gaudi::Accumulators::Counter<> m_counter_eventsAccepted{this, " = Events accepted"};
@@ -253,19 +281,41 @@ private:
     histProfile1d_pathTravel_v_vs_global_z,
     histProfile1d_pathTravel_r_vs_global_z,
     histProfile1dArrayLen };
-  mutable std::unordered_map<
+  mutable std::unordered_map< // creates a hash map where the key is the layer number and the value is an array of histograms for that layer
     int, // layer number
-    std::array<
-      std::unique_ptr<
+    std::array< // craetes a fixed size array of histogram pointers.
+      std::unique_ptr< // creates an exclusive ownership pointer to the histo, this class owns the histo, automatically deltes when teh class is destroyed. can't eb copied. only moved 
         Gaudi::Accumulators::StaticProfileHistogram<
-          1, 
-          Gaudi::Accumulators::atomicity::full,
-          float
+          1, // 1d histo
+          Gaudi::Accumulators::atomicity::full, //thread safe
+          float // stores float 
         >
       >,
       histProfile1dArrayLen
     >
   > m_histProfile1d;
+      /* m_histProfile1d (unordered_map by layer)
+      │
+      ├─ [Layer 0]
+      │  └─ Array[10 profile histograms]
+      │     ├─ [0] → Profile: Charge vs Z
+      │     ├─ [1] → Profile: ClusterSize vs Z
+      │     ├─ [2] → Profile: ClusterSize_u vs Z
+      │     ├─ [3] → Profile: ClusterSize_v vs Z
+      │     ├─ [4] → Profile: Residual_u vs Z
+      │     ├─ [5] → Profile: Residual_v vs Z
+      │     ├─ [6] → Profile: Residual_r vs Z
+      │     ├─ [7] → Profile: PathTravel_u vs Z
+      │     ├─ [8] → Profile: PathTravel_v vs Z
+      │     └─ [9] → Profile: PathTravel_r vs Z
+      │
+      ├─ [Layer 1]
+      │  └─ Array[10 profile histograms]
+      │     └─ ...
+      │
+      └─ [Layer N]
+        └─ ...
+        */
 
   enum { 
     hist2d_digiHitCharge_vs_global_z,
@@ -319,6 +369,7 @@ private:
     hist1dglobal_pathTravel_r_ratio,
     hist1dglobalArrayLen
   };
+  //These are global histograms, not per layer. Single set of histograms for the entire detector. Arrays would be enough. 
   std::array<
     std::unique_ptr<
       Gaudi::Accumulators::StaticHistogram<
