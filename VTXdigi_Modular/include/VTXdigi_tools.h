@@ -1,5 +1,5 @@
 // VTXdigi_Modular/include/VTXdigi_tools.h
-#pragma once
+#pragma once // preprocessor directive that prevents the heaeder file from being included more than once in a single compilation.
 
 #include "GaudiKernel/GaudiException.h"
 #include "GaudiKernel/RndmGenerators.h"
@@ -32,15 +32,16 @@ class SimHitWrapper {
   mutable dd4hep::rec::Vector3D m_truthPos; // simHit truth position, local coordinates. Mutable because it might be adjusted in const ChargeCollector::FillHit() to account for charge collection biases (see ChargeCollector_impl.h ChargeCollector_LUT::MoveTruthPosition() for more info).
 
 public:
-  SimHitWrapper(edm4hep::SimTrackerHit simTrackerHit, const std::unique_ptr<dd4hep::DDSegmentation::BitFieldCoder>& cellIdDecoder);
-  SimHitWrapper(const SimHitWrapper& other) = default;
-  SimHitWrapper(SimHitWrapper&& other) = default;
-  SimHitWrapper() = default;
+//multiple constructors with different parameter types, to allow for different ways of constructing a SimHitWrapper object.
+  SimHitWrapper(edm4hep::SimTrackerHit simTrackerHit, const std::unique_ptr<dd4hep::DDSegmentation::BitFieldCoder>& cellIdDecoder); // parameterised constructor 
+  SimHitWrapper(const SimHitWrapper& other) = default; // Copy constructor : Creates a new simhitwrapper by copying an existing one ; = default means use the compiler generated version (copy each memeber)
+  SimHitWrapper(SimHitWrapper&& other) = default; // Move constructor : Creates new simhitwrapper by stealing resources from an existing one; && = Rvalue refernce ; = default means use compiler generated version  
+  SimHitWrapper() = default; // default constructor : creates empty simhitwrapper with no parametrs 
 
   /** @brief Set the truth position of the simHit in local coordinates */
   inline void SetTruthPos(const dd4hep::rec::Vector3D& pos) const { m_truthPos = pos; } // only used for histogramming after filling the hits, so not really a problem that this is mutable
 
-  friend void swap(SimHitWrapper& a, SimHitWrapper& b) noexcept;
+  friend void swap(SimHitWrapper& a, SimHitWrapper& b) noexcept; // Friend function for efficient swapping. The freind keywords allows swap() to access the private members of SimHitWrapper; noexceot : promises no exception will be thrown.
   inline const edm4hep::SimTrackerHit* hitPtr() const { return &m_simTrackerHit; }
 
   /** @brief Access the truth position of the simHit in local coordinates
@@ -62,10 +63,10 @@ struct Pixel {
   std::unordered_set<const SimHitWrapper*> simHits;
   std::pair<int, int> index; // This info is saved in (a) the map key, and (b) here inside the Pixel object. This is inefficient. But it makes the code a bit nicer not having to pass the index around separately.
 
-  Pixel(std::pair<int, int> pix) : charge(0.f), index(pix) {
-    simHits.reserve(2); // avoid too many reallocations, will rarely see more than 2 simTrackerHits contributing to the same pixel
+  Pixel(std::pair<int, int> pix) : charge(0.f), index(pix) {//parametrised constructor; parameters : std::pair<int, int> ; member initialisation list : charge(0.f), index(pix)
+    simHits.reserve(2); // avoid too many reallocations, will rarely see more than 2 simTrackerHits contributing to the same pixel; allocate space for 2 elements.
   }
-  Pixel() : charge(0.f), index({-1, -1}) {
+  Pixel() : charge(0.f), index({-1, -1}) { // default constructor; Initialize index to {-1, -1} (invalid marker)
     simHits.reserve(2); // avoid too many reallocations, will rarely see more than 2 simTrackerHits contributing to the same pixel
   }
 };
@@ -94,6 +95,10 @@ std::array<std::pair<int, int>, 4> GetDirectNeighbors(const std::pair<int, int>&
 
 /* -- HitMap -- */
 
+//Thi sstruct is a function (has operator()); called like Hash_PairInt()(pair_val)
+// The operator() makes this tstruct callable as a function 
+// Purpose : Hash a pair<int,int> into a size_t
+//To-do : come back to this= later. Not clear atm
 struct Hash_PairInt {
   size_t operator()(const std::pair<int,int>& i_uv) const noexcept {
     return (static_cast<uint64_t>(i_uv.first) << 32) ^ static_cast<uint32_t>(i_uv.second);
