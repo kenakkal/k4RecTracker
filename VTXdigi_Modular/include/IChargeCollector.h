@@ -7,13 +7,14 @@ struct VTXdigi_Modular;
 
 namespace VTXdigi_tools {
   
-  class SimHitWrapper; // forward-declare things in include/VTXdigi_tools.h
-  class HitMap;
+  class SimHitWrapper; // forward-declare things in include/VTXdigi_tools.h -> forward-declare : tells compiler tehse classes exists but details are elsewhere
+  class HitMap; // forward-declare; Allows using pointers/references without including full headers; reduces compilation dependencies
 
-class IChargeCollector {
+class IChargeCollector { //abstract base class
 public:
-  virtual ~IChargeCollector() = default;
-  virtual void FillHit(const SimHitWrapper& simHit, HitMap& hitMap, const TGeoHMatrix& trafoMatrix) const = 0;
+  virtual ~IChargeCollector() = default; // virtual destructor 
+  // Don't need full definition of SimHitWrapper, just a reference. // If we included the full header, compilation would be slower
+  virtual void FillHit(const SimHitWrapper& simHit, HitMap& hitMap, const TGeoHMatrix& trafoMatrix) const = 0; //pure virtual function (=0)
   float GetChargeCollectionDepthCenter() const { return m_chargeCollectionDepthCenter; }
 
 protected:
