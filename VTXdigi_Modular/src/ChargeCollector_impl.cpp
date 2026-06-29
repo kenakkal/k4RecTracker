@@ -6,10 +6,14 @@ namespace VTXdigi_tools {
 using ::VTXdigi_Modular; // "unqualified name introduction from global namespace" (just so I remember what to call this in C++ speak)
 using ::endmsg; // makes the Copilot autocomplete work better
 
+//Creates and returns the chargecollector based on the algo name 
+
+// std::unique_ptr : returns smart pointer to abstract interface (caller doesnt need to know concerete type); const VTXdigi_Modular& digitizer : digitiser object for config acess; algo name to select implemenattion 
 std::unique_ptr<IChargeCollector> CreateChargeCollector(const VTXdigi_Modular& digitizer, const std::string& algorithm) {
-  std::unique_ptr<IChargeCollector> chargeCollector;
+  std::unique_ptr<IChargeCollector> chargeCollector; // empty smart pointer 
 
   if (algorithm == "LookupTable") {
+    //creates a new ChargeCollector_LUT object on the heap; passes digitiser refernce to the constructor; retirns unique_ptr <ChargeCollector_LUT> 
     chargeCollector = std::make_unique<ChargeCollector_LUT>(digitizer);
   } else if (algorithm == "Drift") {
     throw std::runtime_error("ChargeCollector_Drift not implemented yet.");
@@ -42,6 +46,8 @@ std::unique_ptr<IChargeCollector> CreateChargeCollector(const VTXdigi_Modular& d
   // throw std::runtime_error("Unknown ChargeCollector type: " + algorithm);
 }
 
+//constructs path info from a simhit and trafomatrix; returns true if path is valid. L: 43-44 on ChargeCollector_impl.h 
+//Path : struct in  ChargeCollector_impl.h  L 27-28; SimHitWrapper : class in VTXdigi_tools.h L :25
 bool ConstructPath(Path& path, const SimHitWrapper& simHit, const TGeoHMatrix& trafoMatrix, const VTXdigi_Modular&  digitizer) {
   const float eps = 1e-6f; // reasonable for number O(0.01) (like sensor thickness in mm) with float precision
 
@@ -56,28 +62,36 @@ bool ConstructPath(Path& path, const SimHitWrapper& simHit, const TGeoHMatrix& t
   trafoMatrix.MasterToLocalVect(momentum_global, momentum_local);
 
   /* Step 1 - travel vector */
-  const double scaleFactor_travel = digitizer.ActiveVolumeDimensions().at(2) / std::abs(momentum_local[2]);
-  path.travel = scaleFactor_travel * dd4hep::rec::Vector3D(momentum_local[0], momentum_local[1], momentum_local[2]); 
+  //how far the particle travels through a sensor given the momentum direction 
+  const double scaleFactor_travel = digitizer.ActiveVolumeDimensions().at(2) / std::abs(momentum_local[2]); // thickness/z-momentum : how much to scale the momentum vetcor in z direction 
+  // scale the mom vec so that the z comp = sensor thickness. This gives us the actual 3D path the particle takes through the sensor. 
+  path.travel = scaleFactor_travel * dd4hep::rec::Vector3D(momentum_local[0], momentum_local[1], momentum_local[2]); // travel vector : scalefactor * momentum vec 
 
   /* Step 2 - entry point */
   if (std::abs(path.simPos.z()) > digitizer.ActiveVolumeDimensions().at(2)/2.f + eps) {
       digitizer.warning() << "SimHit position is outside the sensor volume (local w = " << path.simPos.z() << " mm, sensor thickness = " << digitizer.ActiveVolumeDimensions().at(2) << " mm). This should never happen. Forcing it to w=0." << endmsg;
     path.simPos.z() = 0.f; // ensures no divide by zero etc
   }
+  // path.simPos : Current hit position inside the sensor 
+  // path.travel : direction and distance travelled through the sensor
+  // goal is to find the entry point 
   float shiftDist_w;
-  if (path.travel.z() >= 0.f) {
-    shiftDist_w = path.simPos.z() + 0.5f * digitizer.ActiveVolumeDimensions().at(2);
+  if (path.travel.z() >= 0.f) { // if the particle is travelling in the +z direction; it would have entered from back side; hence adding half the sensor thickness 
+    shiftDist_w = path.simPos.z() + 0.5f * digitizer.ActiveVolumeDimensions().at(2); // distance to the entry face 
   }
   else {
-    shiftDist_w = path.simPos.z() - 0.5f * digitizer.ActiveVolumeDimensions().at(2);
+    shiftDist_w = path.simPos.z() - 0.5f * digitizer.ActiveVolumeDimensions().at(2); // the vice-versa case 
   }
-  const float scaleFactor_entry = shiftDist_w / path.travel.z();
-  path.entry = path.simPos - scaleFactor_entry * path.travel;
+  const float scaleFactor_entry = shiftDist_w / path.travel.z(); // scale factor to multiply the travel vector to reach the entry point 
+  path.entry = path.simPos - scaleFactor_entry * path.travel; // Trace backwards (sibstract) along the travel vector to find the exact entry point on the sensor surface.
 
   /* Step 3 - clip path to sensor edges (in u/v) */
-  std::pair<float, float> t = std::make_pair(0.f, 1.f); // parametrize path as entry + t*travel; t in [0,1]
-  t = ComputePathClippingFactors(t, path.entry.x(), path.travel.x(), digitizer.ActiveVolumeDimensions().at(0));
-  t = ComputePathClippingFactors(t, path.entry.y(), path.travel.y(), digitizer.ActiveVolumeDimensions().at(1));
+  // Particle path might extend outside the senosr in u,v directions even tho it passes through the thickness correctly. Goal is to trim the path to only the part inside the sensor in u, v direction.
+  
+  // Any point on the path : p(t) = entry + t * travel; t in [0,1] (start to end)
+  std::pair<float, float> t = std::make_pair(0.f, 1.f); // parametrize path as entry + t*travel; t in [0,1] 
+  t = ComputePathClippingFactors(t, path.entry.x(), path.travel.x(), digitizer.ActiveVolumeDimensions().at(0)); // clip in the u direction 
+  t = ComputePathClippingFactors(t, path.entry.y(), path.travel.y(), digitizer.ActiveVolumeDimensions().at(1)); // clip in v direction 
   if (t.first != 0.f || t.second != 1.f) { 
     if (0.f <= t.first && t.first < t.second && t.second <= 1.f) {
       /* valid clipping */

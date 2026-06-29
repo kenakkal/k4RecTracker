@@ -1,8 +1,17 @@
 // VTXdigi_Modular/src/VTXdigi_Modular.cpp
 #include "VTXdigi_Modular.h"
 
+//This is a declaration to Gaudi. I'd do it at the end of the functional. See Gaudi tutorial slide #35
 DECLARE_COMPONENT(VTXdigi_Modular)
 
+//No Struct? with the class definition of VTXdigi_Modular? -> Jona has put the class definition in the header file, and the implementation of the functions in this .cpp file. 
+//(This is more readable and also necessary for some functions to be callable from other files eg. the FillHistograms_fromChargeCollector_perSimHit function, 
+//which is called from the charge collector implementation).
+// Don't know if we want to do this way or follow the way introduced in the Gaudi tutorial where you also have theg class definition in the .cpp file. 
+//I think this is a matter of taste. Not really sure I have a preference yet. Let's see how this evolves as i work through this code.
+
+
+// I think in the key vcalue pairs : UNDEFINED indicates that the user must configure this. The devloeper does not want to hard code the paths 
 VTXdigi_Modular::VTXdigi_Modular(const std::string& name, ISvcLocator* svcLoc)
     : MultiTransformer(name, svcLoc,
                        {KeyValues("SimTrackHitCollectionName", {"UNDEFINED_SimTrackHitCollectionName"}),
@@ -12,6 +21,7 @@ VTXdigi_Modular::VTXdigi_Modular(const std::string& name, ISvcLocator* svcLoc)
   info() << "Constructed successfully" << endmsg;
 }
 
+//StatusCode : return type 
 StatusCode VTXdigi_Modular::initialize() {
   info() << "INITIALIZING VTXdigi_Modular..." << endmsg;
 
@@ -30,6 +40,8 @@ StatusCode VTXdigi_Modular::initialize() {
 
   // This needs to come in after the properties, geometry and services have all been initialized 
   verbose() << "Initializing charge collection method: " << m_chargeCollectionMethod.value() << endmsg;
+  //*this : derefernce the 'this' pointer. 'this' -> VTXdigi_Modular* (pointer to the current object); '*this' -> VTXdigi_Modular& (refernce to the current object)
+  //by passing *this, charge collector has access to digitizer properties 
   m_chargeCollector = VTXdigi_tools::CreateChargeCollector(*this, m_chargeCollectionMethod);
 
   info() << " - Initialized successfully." << endmsg;
@@ -121,11 +133,12 @@ void VTXdigi_Modular::InitServicesAndGeometry() {
    *  - m_volumeManager
    *  - m_subDetector
    */
+  //m_threshold.value() coz it is a Guadi property and not a regular float variable
   if (m_threshold.value() < 0.f)
     throw GaudiException("Threshold " + std::to_string(m_threshold.value()) + " e- is negative.", "VTXdigi_Modular::InitServicesAndGeometry()", StatusCode::FAILURE);
   if (m_smearing_charge.value() < 0.f)
     throw GaudiException("Charge smearing sigma " + std::to_string(m_smearing_charge.value()) + " e- is negative.", "VTXdigi_Modular::InitServicesAndGeometry()", StatusCode::FAILURE);
-
+  // You dont wanna digitise noise and get fake signals. checks for 5sigma significance. PS: random pixel noise firing is not simulated  
   if (m_threshold.value() <= 5 * m_smearing_charge.value())
     warning() << "Threshold " << m_threshold.value() << " e- is less than 5 times the charge smearing sigma " << m_smearing_charge.value() << " e-. This digitiser does only apply smearing to pixels that collect any charge from simHits, so it cannot simulate random firing pixels. (doing this by drawing a noise for every pixel in the detector for every event would be INCREDIBLY slow. A work-around to simulate random pixels firing might be implemented in the future)." << endmsg;
   if (m_smearing_time.value() < 0.f)
@@ -140,10 +153,12 @@ void VTXdigi_Modular::InitServicesAndGeometry() {
   else
     throw GaudiException("Property ClusterPositionUncertainty must be either empty (for charge-weighted estimation), have exactly 2 values (for fixed uncertainty in u and v), or six values (for cluster-length based estimation).", "VTXdigi_Modular::InitServicesAndGeometry()", StatusCode::FAILURE);
 
+  // service() : A function that retrieves a Gaudi service by name; the name/type of the service to be returned is "RndmGenSvc"; false -> please find it but dont create it 
   m_randomService = service("RndmGenSvc", false);
   if (!m_randomService) 
     throw GaudiException("Unable to get RndmGenSvc.", "VTXdigi_Modular::InitServicesAndGeometry()", StatusCode::FAILURE);
-
+  
+  //Initialize a random number generator to produce Gaussian-distributed random numbers for charge smearing centered at a mean valu of 0 and a sigma of m_smearing_charge.value()
   if (m_rndm_charge.initialize(m_randomService, Rndm::Gauss(0., m_smearing_charge.value())).isFailure())
     throw GaudiException("Unable to initialize random number generator for charge smearing.", "VTXdigi_Modular::InitServicesAndGeometry()", StatusCode::FAILURE);
   if (m_rndm_time.initialize(m_randomService, Rndm::Gauss(0., m_smearing_time.value())).isFailure())
@@ -166,6 +181,8 @@ void VTXdigi_Modular::InitServicesAndGeometry() {
   if (!m_detector)
     throw GaudiException("Unable to retrieve the DD4hep detector from GeoSvc", "VTXdigi_Modular::InitServicesAndGeometry()", StatusCode::FAILURE);
   
+  // Extract a SurfaceManager object from the detector geometry; m_detector : pointer to the detector geometry object; extension() method that retrieves attached data/components
+  //dd4hep::rec::SurfaceManager : what to get from the extension(); m_detector->extension<SomeOtherTool>()
   const dd4hep::rec::SurfaceManager* surfaceManager = m_detector->extension<dd4hep::rec::SurfaceManager>();
   if (!surfaceManager)
     throw GaudiException("Unable to retrieve the SurfaceManager from the DD4hep detector", "VTXdigi_Modular::InitServicesAndGeometry()", StatusCode::FAILURE);
@@ -184,23 +201,57 @@ void VTXdigi_Modular::InitServicesAndGeometry() {
     * We accomplish this with a transformation matrix. This is valid for all sensors in the subdetector */
     
     /* Set the sensor local transformation matrix, st. the sensors normal vector is parallel to w-axis (by simply looking at the first sensor in the map) */
+    // get the first sensor from teh surfuce map; Why only check the first sensor? Assumption: All sensors in a subdetector have the same coordinate system convention. Is this a valid assumption?
+    // If the first senors is ccorrectly aligned, everything esle should be. 
     auto surfaceMapIter = m_surfaceMap->begin();
     if (surfaceMapIter == m_surfaceMap->end())
       throw GaudiException("Surface map for subdetector " + m_subDetName.value() + " is empty.", "VTXdigi_Modular::InitServicesAndGeometry()", StatusCode::FAILURE);
+    
+    /*cellID    = Unique identifier for this sensor
+    surface   =  Surface object with:  
+            ├─ .normal()   = Vector perpendicular to surface
+            ├─ .u()        = Vector along U direction
+            ├─ .v()        = Vector along V direction
+            └─ other properties (position, shape, etc.)*/
     const unsigned long cellID = surfaceMapIter->first;
     const dd4hep::rec::ISurface* surface = surfaceMapIter->second;
   
+    //m_volumeManager.lookupDetElement(cellID) : returens DetElement for this cellID; nominal() : nominal (non aligned) placement; worldTransformation() : returns TGepHMatrix converting global to local coordinates
+    /*TGeoHMatrix = Transformation matrix (4×4 homogeneous)
+      Contains:   
+      ├─ Rotation
+      ├─ Translation
+      └─ Operations:
+          ├─ MasterToLocal()     - Global → sensor local
+          ├─ LocalToMaster()     - Sensor local → global
+          ├─ MasterToLocalVect() - Transform vectors only
+          └─ LocalToMasterVect() - Transform vectors only*/
+    // sensorTrafoMatrix  : transformation vector (handles rotation and translation)
     TGeoHMatrix sensorTrafoMatrix = m_volumeManager.lookupDetElement(cellID).nominal().worldTransformation();
     double tempVec[3];
     
     const double epsilon = 1.0e-6; // reasonable for comparing to 1
     
     /* first: rotate sensor normal onto W-axis*/
+    //surface->normal() : sufruce normal vector in global cordinates; unit(): normalises it; MasterToLocalVect(): transforms a vector from global to local cordinates
+    //tempVec : same vector but in local cordinates - output array  
     sensorTrafoMatrix.MasterToLocalVect(surface->normal().unit(), tempVec);
+    // tempVec[0], tempVec[1], tempVec[2] : x,y,z componenet in local cordinates i
     dd4hep::rec::Vector3D n_local(tempVec[0], tempVec[1], tempVec[2]);
+    
+    //TGeoRotation(phi,theta,psi); Phi is the rotation angle about Z axis and is done first, 
+    //theta is the rotation about new X and is done second, psi is the rotation angle about new Z and is done third. 
+    /*STEP 1: Pen points RIGHT
+        Rotate 90° CLOCKWISE around Z
+        Result: Pen points TOWARD YOU ✓
 
-    if (std::abs(n_local.x() - 1.0) < epsilon) {
+        STEP 2: Pen now points TOWARD YOU (along Y toward you)
+        Rotate 90° around X axis (tip backward)
+        Result: Pen points UP (along Z) ✓*/
+    
+        if (std::abs(n_local.x() - 1.0) < epsilon) {
       debug() << "   - Local sensor normal vector is (1,0,0). Defining rotation matrix to rotate it to (0,0,1)." << endmsg;
+      
       m_sensorNormalRotation = TGeoRotation("rot",90.,90.,0.);
     } 
     else if (std::abs(n_local.y() - 1.0) < epsilon) {
@@ -218,6 +269,8 @@ void VTXdigi_Modular::InitServicesAndGeometry() {
     /* TODO: this only makes sure that the sensor normal vector is perpendicular to the surface.
     * It does NOT make sure that the local x and y are not swapped and have the correct polarity.
     * I tried coming up with the correct transformation matrix based on the axis rotations, but tbh I am quite stumped by how the rotation acts on the vectors, and how I can fix it. */
+    
+    //After computing the final transformation matreix M, check if U points along (1,0,0), V along (0,1,0) and W (0,0,1)
     TGeoHMatrix M = VTXdigi_tools::ComputeSensorTrafoMatrix(cellID, m_volumeManager, m_sensorNormalRotation);
     M.MasterToLocalVect(surface->u().unit(), tempVec);
     if (std::abs(tempVec[0]-1.) > epsilon || std::abs(tempVec[1]) > epsilon || std::abs(tempVec[2]) > epsilon)
@@ -238,11 +291,13 @@ void VTXdigi_Modular::InitServicesAndGeometry() {
 
   debug() << " - Retrieving subdetector " << m_subDetName.value() << " from DD4hep detector..." << endmsg;
   verbose() << "   - The detector has the following subDetectors: " << endmsg;
+  // loop through all  subdetectors in teh detector 
+  // m_detector->detectors() : returens a collection of pairs (name and detector elememt); [subDetName, subDet] : 1st element (string name), 2nd element: DetElement  
   for (const auto& [subDetName, subDet] : m_detector->detectors()) {
     verbose() << "   - " << subDetName << endmsg;
   }
 
-  if (m_subDetChildName.value() != m_undefinedString) {
+  if (m_subDetChildName.value() != m_undefinedString) { // is the subdetchildname configured?; if yes, next lines 
     /* IDEA/Allegro setup */
     const dd4hep::DetElement subDet = m_detector->detector(m_subDetName.value());
     m_subDetector = subDet.child(m_subDetChildName.value());
@@ -297,15 +352,16 @@ void VTXdigi_Modular::InitLayersAndSensors() {
   *  I don't know of a better way to do this (that also works for the IDEA detector model) */
   std::string simHitCollectionName;
   if (this->getProperty("SimTrackHitCollectionName", simHitCollectionName).isFailure())
-    throw GaudiException("Could not retrieve SimTrackHitCollectionName property while checking geometry consistency.", "VTXdigi_Modular::InitLayersAndSensors()", StatusCode::FAILURE);
-
-  dd4hep::Detector::HandleMap readoutHandleMap = m_detector->readouts();
-  int readoutCount = 0;
-  std::string matchedReadoutKey;
+    throw GaudiException("Could not retrieveName property while checking geometry consistency.", "VTXdigi_Modular::InitLayersAndSensors()", StatusCode::FAILURE);
+ 
+  dd4hep::Detector::HandleMap readoutHandleMap = m_detector->readouts(); // gets all the readouts in the detector; readoutHandleMap contains pairs 
+  int readoutCount = 0; // how many readouts matched (should be excatly 1)
+  std::string matchedReadoutKey; // Name of the matching readout
   /* loop over readouts, see if one matches our simHitCollection */
   for (const auto& [readoutKey, readoutHandle] : readoutHandleMap) {
-    if (simHitCollectionName.find(readoutKey) != std::string::npos) {
+    if (simHitCollectionName.find(readoutKey) != std::string::npos) { // search for readout key in simHitCollection
       ++readoutCount;
+      //we only want to configure once with the first match 
       if (readoutCount != 1)
         continue;
       matchedReadoutKey = readoutKey;
@@ -380,7 +436,9 @@ void VTXdigi_Modular::InitLayersAndSensors() {
             throw GaudiException("Unknown sensor solid type found (neither dd4hep::Box nor dd4hep::Trd1).", "VTXdigi_Modular::InitLayersAndSensors()", StatusCode::FAILURE);
           }
         }
-
+        
+        // solidDimension is an array of 3 flaoting points; find the thickness which would be the smallest dimension - std::min_element() : returns teh iterator pointing to the smallest value in the array 
+        // std::distance() : calculates the diatnce from the start to the location of the minimum element 
         const uint thicknessIndex = std::distance(solidDimensions.begin(), std::min_element(solidDimensions.begin(), solidDimensions.end()));
         const float solidThickness = solidDimensions.at(thicknessIndex);
         const float solidLength_0 = solidDimensions.at((thicknessIndex+1) % 3);
@@ -388,18 +446,20 @@ void VTXdigi_Modular::InitLayersAndSensors() {
 
         // SECOND: find lengths of the sensor (these will match the segmentation), and amount of inactive material above and below 
         // using the sensitive surface of this sensor (which lies in the middle of the active volume)
-        const auto surfaceIt = m_surfaceMap->find(sensorObj.volumeID());
-        if (surfaceIt == m_surfaceMap->end()) {
+        const auto surfaceIt = m_surfaceMap->find(sensorObj.volumeID()); // find the surfuce which corresponds to a specific sensor using sensor's volume ID key 
+        if (surfaceIt == m_surfaceMap->end()) { // check if the serach for the surfuce was successful 
           throw GaudiException("Could not find surface for sensor " + sensorKey + " (volumeID " + std::to_string(sensorVolumeID) + ") in layer " + std::to_string(layer) + " of subDetector " + m_subDetName.value() + " while checking geometry consistency.", "VTXdigi_Modular::InitLayersAndSensors()", StatusCode::FAILURE);
         }
-        dd4hep::rec::ISurface* surface = surfaceIt->second;
-        if (!surface) {
+        dd4hep::rec::ISurface* surface = surfaceIt->second; // extract the surfuce pointer; surfaceIt : pair  which contains volumeObj and the surface object; m_surfaceMap is: std::map<volumeID, ISurface*>
+        if (!surface) { // check sif the surfuce pointer is null 
           throw GaudiException("Surface pointer for sensor " + sensorKey + " (volumeID " + std::to_string(sensorVolumeID) + ") in layer " + std::to_string(layer) + " of subDetector " + m_subDetName.value() + " is null while checking geometry consistency.", "VTXdigi_Modular::InitLayersAndSensors()", StatusCode::FAILURE);
         }
 
-        const float surfaceLength_u = surface->length_along_u() * 10; // convert cm to mm
+        const float surfaceLength_u = surface->length_along_u() * 10; // convert cm to mm // where is length_along_u() is defined?? : virtual double dd4hep::rec::ISurface::length_along_u()const
+
         const float surfaceLength_v = surface->length_along_v() * 10;
-        const float surfaceThickness_above = surface->outerThickness() * 10; // sensor thickness measured from w=0 upwards, including inactive material above the active volume. 
+        const float surfaceThickness_above = surface->outerThickness() * 10; // sensor thickness measured from w=0 upwards, including inactive material above the active volume. virtual double dd4hep::rec::ISurface::outerThickness()const
+
         const float surfaceThickness_below = surface->innerThickness() * 10; // same, but below
         //Note: the sensor local coordinate system (u,v,w) is centered on the active volume, so inactive material upper/lower might be assymetric
 
@@ -408,6 +468,9 @@ void VTXdigi_Modular::InitLayersAndSensors() {
           throw GaudiException("Solid sensor thickness " + std::to_string(solidThickness) + " mm is larger than total sensor thickness " + std::to_string(surfaceThickness_above) + " + " + std::to_string(surfaceThickness_below) + " = " + std::to_string(surfaceThickness_above + surfaceThickness_below) + " mm (including inactive material) in sensor " + sensorKey + " (volumeID " + std::to_string(sensorVolumeID) + ") in layer " + std::to_string(layer) + " of subDetector " + m_subDetName.value() + ". This indicates an inconsistency in the geometry description.", "VTXdigi_Modular::InitLayersAndSensors()", StatusCode::FAILURE);
         }
 
+        // the following code block checks if the senosr dimension btw the 2 sources match.
+        // solidLength_0, solidLength_1 - Dimensions from the solid (physical sensor); surfaceLength_u, surfaceLength_v
+        // id neither of the 2 possible matches work -> geometry is broken; throw error 
         float tolerance = 0.01f; // 10 um should be small enough to find geometry inconsistencies, but does not trip on trapezoid weirdness in IDEA ultra light in O(2 um)
         if ( 
           !(( std::abs(solidLength_0-surfaceLength_u) < tolerance) && (std::abs(solidLength_1-surfaceLength_v) < tolerance)) &&
@@ -418,6 +481,7 @@ void VTXdigi_Modular::InitLayersAndSensors() {
         }
 
         // FOURTH: apply the parameters we found
+        // membersDefined is set to false in L391 
         if (!membersDefined) {
           // For the first sensor we find, set the digitizer class members
           m_sensorActiveThickness = solidThickness;
@@ -425,7 +489,8 @@ void VTXdigi_Modular::InitLayersAndSensors() {
           m_inactiveMaterialBelow = surfaceThickness_below - solidThickness/2.f; 
           m_sensorLength.first = surfaceLength_u; 
           m_sensorLength.second = surfaceLength_v;
-
+          
+          //calculates the pixel count in both the direction and validates that the result is an integer. We cannot have fractional pixels!!
           float pixelCountU = m_sensorLength.first / m_pixelPitch.first;
           float pixelCountV = m_sensorLength.second / m_pixelPitch.second;
           if (abs(pixelCountU - std::round(pixelCountU)) > 0.0001 || abs(pixelCountV - std::round(pixelCountV)) > 0.0001)
@@ -492,8 +557,20 @@ void VTXdigi_Modular::InitHistograms() {
       axis_z = Gaudi::Accumulators::Axis<float>{100, -96.5, 96.5}; // Want to cover layer 0 of IDEA vertex det perfectly to avoid binning-edge-effects, so we use a the correct length of 185 mm
     }
 
+    //Container of pointers to histograms; hist1d : variable name; A fixed-size array of pointers to histogram objects
+    // 1 -> 1d histo; atomicity::full implies thread safe; float : value type  - 1D histo that stores floating point values, can accumulate data from multiple threads safely
+    // std::unique_ptr points to one histogram; unique_ptr : exclusive oiwnership smart pointer, one histogram per pointer; automatically deletes when the pointer goes out of scope  
+    // std::array<T,N> : T : type; N : size of the array;
+    // Array of N smart pointers, each pointing to a 1D, thread safe histo that stores a floating point value 
     std::array< std::unique_ptr< Gaudi::Accumulators::StaticHistogram< 1, Gaudi::Accumulators::atomicity::full, float > >, hist1dArrayLen > hist1d;
-
+    
+    //Aceeses an element in the histo array; creates a new histo with specific properties; stores it using a smart pointer reset 
+    // .at() : safe access method - throws exception if index goes out of bounds; can use [] too but would result in undefined behaviour/crashes if the index goes out of bound 
+    // hist1d_simHitE : enum value (L208 in VTXdigi_modular.h); is the index for the simulated hit energy histo 
+    //.reset() : reset the unique_ptr with new new histo object; reset deletes any old content and replaces with new contents 
+    //this : pointer to the VTXdigi_Modular object; Gaudi needs to know which algo owns this histo;  "Layer" + std::to_string(layer) + "/simHit_energyDep" : hiusto name/path 
+    // Title; X; Y axis names : seperated by semicolon   
+    //axis_E : defines binning/ramge of histo; defined in L528
     hist1d.at(hist1d_simHitE).reset(
       new Gaudi::Accumulators::StaticHistogram<1, Gaudi::Accumulators::atomicity::full, float> {this,
         "Layer" + std::to_string(layer) + "/simHit_energyDep",
@@ -848,11 +925,13 @@ void VTXdigi_Modular::InitHistograms() {
         axis_time
       }
     ); 
-
+    // Stores histo array in a map associating it with a specific layer 
+    // .emplace () : insert method; layer : key ; std::move : move and not copy the histo 
+    // m_hist1d is a map (L258-270 : VTXdigi_Modular.h) 
+    // insert a map at 'layer' key moving the histogram array  
     m_hist1d.emplace(layer, std::move(hist1d));
 
     /* -- 1d-profile-hist -- */
-
     std::array< std::unique_ptr< Gaudi::Accumulators::StaticProfileHistogram<1,Gaudi::Accumulators::atomicity::full,float>>, histProfile1dArrayLen> histProfile1d;
 
     histProfile1d.at(histProfile1d_digiHitCharge_vs_global_z).reset(
