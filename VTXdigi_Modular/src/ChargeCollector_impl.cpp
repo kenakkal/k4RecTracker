@@ -14,6 +14,8 @@ std::unique_ptr<IChargeCollector> CreateChargeCollector(const VTXdigi_Modular& d
 
   if (algorithm == "LookupTable") {
     //creates a new ChargeCollector_LUT object on the heap; passes digitiser refernce to the constructor; retirns unique_ptr <ChargeCollector_LUT> 
+    /*This is a function call to create the LUTs. Calls the make_unique template function with the template parameter ChargeCollector_LUT 
+    and the function argument digitiser. Inside make_unique: you call the ChargeCollector_LUT constructor, wrapis ina. unique pointer and returns the smart pointer */
     chargeCollector = std::make_unique<ChargeCollector_LUT>(digitizer);
   } else if (algorithm == "Drift") {
     throw std::runtime_error("ChargeCollector_Drift not implemented yet.");
@@ -86,19 +88,21 @@ bool ConstructPath(Path& path, const SimHitWrapper& simHit, const TGeoHMatrix& t
   path.entry = path.simPos - scaleFactor_entry * path.travel; // Trace backwards (sibstract) along the travel vector to find the exact entry point on the sensor surface.
 
   /* Step 3 - clip path to sensor edges (in u/v) */
-  // Particle path might extend outside the senosr in u,v directions even tho it passes through the thickness correctly. Goal is to trim the path to only the part inside the sensor in u, v direction.
+  // Particle path might extend outside the senosr in u,v directions even tho it passes through the thickness correctly. Goal is to trim the path to only 
+  //the part inside the sensor in u, v direction.
   
   // Any point on the path : p(t) = entry + t * travel; t in [0,1] (start to end)
   std::pair<float, float> t = std::make_pair(0.f, 1.f); // parametrize path as entry + t*travel; t in [0,1] 
   t = ComputePathClippingFactors(t, path.entry.x(), path.travel.x(), digitizer.ActiveVolumeDimensions().at(0)); // clip in the u direction 
   t = ComputePathClippingFactors(t, path.entry.y(), path.travel.y(), digitizer.ActiveVolumeDimensions().at(1)); // clip in v direction 
-  if (t.first != 0.f || t.second != 1.f) { 
-    if (0.f <= t.first && t.first < t.second && t.second <= 1.f) {
+  if (t.first != 0.f || t.second != 1.f) {  // check if the clipping happend : t changed from [0,1]
+    if (0.f <= t.first && t.first < t.second && t.second <= 1.f) { // check if the clipping range is valid 
       /* valid clipping */
       digitizer.debug() << "       - Clipping SimHitPath with t [" << t.first << ", " << t.second << "]. PathLength changed to " << static_cast<int>((t.second - t.first) * path.travel.r()*1000) << " um from " << static_cast<int>(path.travel.r()*1000) << " um" << endmsg;
-
-      path.entry = path.entry + t.first * path.travel;
-      path.travel = (t.second - t.first) * path.travel;
+      
+      //update the travel path 
+      path.entry = path.entry + t.first * path.travel; // t.first : move to where clipping starts 
+      path.travel = (t.second - t.first) * path.travel; // (t.second - t.first) clipped length as a fraction 
     }
     else [[unlikely]] {
       /* invalid clipping, shouldn't happen */
@@ -110,22 +114,36 @@ bool ConstructPath(Path& path, const SimHitWrapper& simHit, const TGeoHMatrix& t
   }
 
   /* Step 4 -check that path is not much longer than the length it had in Geant4 */
+  // compares the calculated path length (path.travel.r()) to G4's measured path length (path.lengthG4); validates they are consistent; corrects if they are too differnt while keeping the path centered on hit position 
   path.lengthG4 = simHit.hitPtr()->getPathLength();
   if (path.travel.r() > kPathLengthTolerance * path.lengthG4) {
     digitizer.debug() << "       - Shortening path length from " << static_cast<int>(path.travel.r()*1000) << " um to " << static_cast<int>(path.lengthG4*1000) << " um (the respective path length in Geant4)." << endmsg;
 
     /* make sure the path stays centred around the simTrackerHit position */
+    //Find where SimHit/ simPos is along the path 
+    // (path.simPos - path.entry): vector (v) from entry to simPos; Project this vector onto the travel direction (v.travel/travel2). 
     const float t_simPos = ( (path.simPos - path.entry).dot(path.travel) ) / (path.travel.r() * path.travel.r());
 
+    //calculate the new path length in parameter space 
+    //0.5: coz we need to center it; path.lengthG4: new path from G4; path.travel.r():full calculated path length 
+    //how much parameter space in t the new shortnened path occupies 
     const float t_length_halved = 0.5f * path.lengthG4 / path.travel.r(); // length of the new path in terms of t [0,1] on old path, halved
+    // center the new path on simPos
+    //Position the new path so SimHit is at its center, but dont extend it outside [0,1] 
+    // std::min(t_simPos, 1.f - t_length_halved) : make sure you dont go too far right; std::max(t_length_halved,....) : make sure you dont go too far left; result : t_center stays in the valid range 
     const float t_center = std::max(t_length_halved, std::min(t_simPos, 1.f - t_length_halved)); // center of new path clamped to [t_length_half, 1 - t_length_half] while not exceeding [0,1]
 
+    
+    // calculate new path boundaries
+    //The new path extends ±t_length_halved from the center
     const float t_min = t_center - t_length_halved;
     const float t_max = t_center + t_length_halved;
 
+    //update entry and travel 
     path.entry = path.entry + t_min * path.travel;
     path.travel = (t_max - t_min) * path.travel;
   }
+  //store the final path length 
   path.length = path.travel.r();
   
 
@@ -133,15 +151,20 @@ bool ConstructPath(Path& path, const SimHitWrapper& simHit, const TGeoHMatrix& t
   return true; // indicate valid path constructed
 }
 
+// function to determine whihc part of the paratmetric path (t in [0,1]) stays within the sensor boundaries in one axis direction. Returns clipped t range  
 std::pair<float, float> ComputePathClippingFactors(std::pair<float,float> t, const float entry_ax, const float travel_ax, const float sensorLength_ax) {
   /* only need the components that are parallel to the axis (u/v) that we are clipping */
+
+  //determine the travel direction. Clipping logic differs based on the direction (?) 
   const bool positiveDir = travel_ax >= 0.f; // false -> path points in negative direction along this axis
 
+  // Find the path extents : minPos - smallest X/Y cordinate the path reaches; maxPos - largest X/Y cordinate the path reaches
+  // entry_ax : entry position, entry_ax + travel_ax = ending position  
   const float minPos = std::min(entry_ax, entry_ax + travel_ax);
   if (minPos < -0.5f * sensorLength_ax) {
     /* path extends out of sensor in negative direction*/
-
-    const float t_clip = (-minPos - 0.5f * sensorLength_ax) / std::abs(travel_ax);
+    // calculate the clipping point : -minPos: how far past the boundary?
+    const float t_clip = (-minPos - 0.5f * sensorLength_ax) / std::abs(travel_ax); // Overshoot/travelpath 
     if (positiveDir){
       t.first = std::max(t.first, t_clip);
     } else {
@@ -183,24 +206,30 @@ LookupTable::LookupTable(const std::string& lutFileName, const VTXdigi_Modular& 
   if (!lutFile.is_open())
     throw std::runtime_error("VTXdigi_tools::LookupTable::LookupTable(): Could not open LUT file \"" + lutFileName + "\".");
 
-  std::string line;
-  int lineNumber = 0;
+  std::string line; // to read each line from the LUT file 
+  int lineNumber = 0; // line counter 
 
   /* Parse pixel-pitch, thickness, in-pixel bin count from header (all in 5th line) */
+  
+  //skipping the first 5 lines with this for loop 
   for (; lineNumber < 5; ++lineNumber)
     std::getline(lutFile, line);
+  
+  //Create string stream from the 5th line. String stream treats a string like a file so that you can read from it 
   std::istringstream headerStringStream(line);
-  std::string headerEntry;
-  std::vector<std::string> headerLineEntries;
-
+  std::string headerEntry; // to hold each token/word from the line
+  std::vector<std::string> headerLineEntries; // to hold all the tokens
+  
+  //std::getline(stream,variable,delimeter): takes a line, reads up to the delimiter and stores the word in a variable and moves past the delimiter   
   while (std::getline(headerStringStream, headerEntry, ' ')) {
-    if (!headerEntry.empty())
+    if (!headerEntry.empty()) // filters empty strings 
       headerLineEntries.push_back(headerEntry);
   }
 
   if (headerLineEntries.size() != 11)
     throw std::runtime_error("VTXdigi_tools::LookupTable::LookupTable(): Invalid number of entries in LUT file in 5th header line: found " + std::to_string(headerLineEntries.size()) + " entries, expected 11.");
 
+  // Get the inpixel bin count from the header (last 3 entries); stoi : string to integer 
   for (int j=0; j<3; j++) {
     m_binCount.at(j) = std::stoi(headerLineEntries.at(7+j));
   }
@@ -230,7 +259,8 @@ LookupTable::LookupTable(const std::string& lutFileName, const VTXdigi_Modular& 
   digitizer.debug() << "   - Found matching pixel pitch and sensor thickness in LUT file." << endmsg;
 
   /* Get matrix size (5x5, 7x7, ...) from the length of the first line after the header */
-  if (std::getline(lutFile, line)) {
+  if (std::getline(lutFile, line)) { // std::getline is reading the 6th line (first line after the header)
+    //count space character in the entire line; subtract 2 spaces corresponding to the 3 bin indices; take the square root to get the matrix size 
     m_matrixSize = static_cast<int>(std::sqrt(std::count(line.begin(), line.end(), ' ') - 2)); // not very robust, but works for valid Allpix2 files. first 3 entries are bin indices
   }
   else {
@@ -238,16 +268,20 @@ LookupTable::LookupTable(const std::string& lutFileName, const VTXdigi_Modular& 
   }
   if (m_matrixSize < 3 || m_matrixSize % 2 == 0)
   throw std::runtime_error("VTXdigi_tools::LookupTable::LookupTable(): Matrix size must be an odd integer >= 3, but is " + std::to_string(m_matrixSize) + ".");
-  m_matrixSize_half = (m_matrixSize - 1) / 2;
+  m_matrixSize_half = (m_matrixSize - 1) / 2; // i dont get why this is needed
   digitizer.debug() << "   - Inferred matrix size of " << m_matrixSize << " from first line." << endmsg;
 
   /* Set up the matrix vector */
+  //allocates memory for the entire LUT
+  //the code line below creates one giant flat vector that will store all the charfe distribution matrices from the LUT.
+  //m_matrices.resize(tot # elements, initialise all to 0)
   m_matrices.resize(m_binCount.at(0) * m_binCount.at(1) * m_binCount.at(2) * m_matrixSize * m_matrixSize, 0.f);
 
   /* set up mapping from Allpix2 LUT format
   *   (row-major, starts on bottom left)
   * to the format expected by the LookupTable class 
   *   (row-major, starts on top-left) */
+ // Goal : convert APSQ format to VTXdigi_Modular format so that we can read APSQ LUTR files correctly 
   std::unordered_map<int, int> indexMapping; // i: index in local format; indexMapping[i]: index in Allpix2 format
   for (int i_u = 0; i_u < m_matrixSize; i_u++) {
     for (int i_v = 0; i_v < m_matrixSize; i_v++) {
@@ -389,8 +423,15 @@ int LookupTable::FindIndex (const Index_inPix& j, const int col, const int row) 
   return index_matrix * m_matrixSize * m_matrixSize + index_element;
 }
 
+//constructor with memeber initialiser list 
+// class name :: constructor name; Intialise parent class IChargeCollector : passes the digitiser to the abstract base class
+/*The initializer list runs before the body, and in a fixed order — not the order written, but the order members are declared 
+(base class first -  IChargeCollector , then declaration order in the class ChargeCollector_LUT):*/
 ChargeCollector_LUT::ChargeCollector_LUT(const VTXdigi_Modular& digitizer) : IChargeCollector(digitizer), m_LUT(digitizer.LutFileName(), digitizer), m_stepLength(digitizer.LutStepLength()) {
   /* LUT is constructed in place (from file) */
+  /* now that m_LUT is fully built, the below code line pulls the depth-center value out of it and caches it on this 
+  (in the base-class member m_chargeCollectionDepthCenter), so later callers can read it via GetChargeCollectionDepthCenter() 
+  without going through m_LUT */
   m_chargeCollectionDepthCenter = m_LUT.GetChargeCollectionDepthCenter();
 
   m_digitizer.info() << " - ChargeCollector_LUT constructed successfully." << endmsg;
